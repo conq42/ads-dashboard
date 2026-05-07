@@ -39,16 +39,6 @@ Your dashboard is live at `your-project.vercel.app` ✓
 
 ---
 
-## ⚠️ Important: Vercel plan
-
-The dashboard fetches data from Meta, Google, and GA4 in a single AI call which can take 30–60 seconds.
-
-- **Hobby plan (free):** 10-second function timeout — dashboard data fetch may time out
-- **Pro plan ($20/month):** 60-second timeout — recommended for agency use
-
-To upgrade: Vercel dashboard → Settings → Billing → Upgrade to Pro.
-
-The **chat panel** works fine on hobby plan since each question is a separate call.
 
 ---
 
