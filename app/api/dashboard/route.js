@@ -93,7 +93,7 @@ Use null for any values you cannot fetch. Round all numbers to 2 decimal places 
         'anthropic-beta': 'mcp-client-2025-04-04',
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
+        model: 'claude-sonnet-4-6',
         max_tokens: 4096,
         system: 'You are a data fetching assistant. You use tools to retrieve ad performance data and return ONLY valid JSON. Never include markdown formatting, backticks, or explanatory text in your response — only the raw JSON object.',
         messages: [{ role: 'user', content: prompt }],
