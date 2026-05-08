@@ -4,6 +4,53 @@ export const maxDuration = 60;
 
 const MCP_SERVER_URL = 'https://ads-mcp-server-1047464303560.europe-west3.run.app/mcp';
 
+async function getGoogleToken() {
+  const email = process.env.GOOGLE_CLIENT_EMAIL;
+  const privateKey = process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n');
+  if (!email || !privateKey) return null;
+
+  const now = Math.floor(Date.now() / 1000);
+  const payload = {
+    iss: email,
+    sub: email,
+    aud: 'https://oauth2.googleapis.com/token',
+    iat: now,
+    exp: now + 3600,
+    scope: 'https://www.googleapis.com/auth/cloud-platform',
+  };
+
+  const encode = (obj) => btoa(JSON.stringify(obj)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+  const header = encode({ alg: 'RS256', typ: 'JWT' });
+  const body = btoa(unescape(encodeURIComponent(JSON.stringify(payload)))).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+  const signingInput = `${header}.${body}`;
+
+  const keyData = privateKey.replace(/-----BEGIN PRIVATE KEY-----|-----END PRIVATE KEY-----|\s/g, '');
+  const binaryKey = Uint8Array.from(atob(keyData), c => c.charCodeAt(0));
+
+  const cryptoKey = await crypto.subtle.importKey(
+    'pkcs8', binaryKey.buffer,
+    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+    false, ['sign']
+  );
+
+  const signature = await crypto.subtle.sign(
+    'RSASSA-PKCS1-v1_5', cryptoKey,
+    new TextEncoder().encode(signingInput)
+  );
+
+  const sig = btoa(String.fromCharCode(...new Uint8Array(signature))).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+  const jwt = `${signingInput}.${sig}`;
+
+  const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${jwt}`,
+  });
+
+  const tokenData = await tokenRes.json();
+  return tokenData.access_token || null;
+}
+
 const SYSTEM = `You are AdsAI, a senior digital marketing analyst for an agency. You have direct access to Meta Ads, Google Ads, Google Merchant Center, and GA4 data through connected tools.
 
 Guidelines:
@@ -19,11 +66,10 @@ export async function POST(request) {
     const { messages } = await request.json();
 
     if (!process.env.ANTHROPIC_API_KEY) {
-      return NextResponse.json(
-        { error: 'ANTHROPIC_API_KEY is not configured.' },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: 'ANTHROPIC_API_KEY is not configured.' }, { status: 500 });
     }
+
+    const authToken = await getGoogleToken();
 
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -43,7 +89,7 @@ export async function POST(request) {
             type: 'url',
             url: MCP_SERVER_URL,
             name: 'ad-manager',
-            authorization_token: process.env.MCP_AUTH_TOKEN,
+            authorization_token: authToken,
           }
         ],
       }),
@@ -55,7 +101,6 @@ export async function POST(request) {
     }
 
     const data = await response.json();
-
     const content = (data.content || [])
       .filter((b) => b.type === 'text')
       .map((b) => b.text)
