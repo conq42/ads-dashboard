@@ -3,8 +3,9 @@ import { NextResponse } from 'next/server';
 export const maxDuration = 60;
 
 const MCP_SERVER_URL = 'https://ads-mcp-server-1047464303560.europe-west3.run.app/mcp';
+const MCP_AUDIENCE = 'https://ads-mcp-server-1047464303560.europe-west3.run.app';
 
-async function getGoogleToken() {
+async function getGoogleIdentityToken() {
   const email = process.env.GOOGLE_CLIENT_EMAIL;
   const privateKey = process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n');
   if (!email || !privateKey) return null;
@@ -14,14 +15,14 @@ async function getGoogleToken() {
     iss: email,
     sub: email,
     aud: 'https://oauth2.googleapis.com/token',
+    target_audience: MCP_AUDIENCE,
     iat: now,
     exp: now + 3600,
-    scope: 'https://www.googleapis.com/auth/cloud-platform',
   };
 
-  const encode = (obj) => btoa(JSON.stringify(obj)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-  const header = encode({ alg: 'RS256', typ: 'JWT' });
-  const body = btoa(unescape(encodeURIComponent(JSON.stringify(payload)))).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+  const toBase64Url = (str) => btoa(str).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+  const header = toBase64Url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
+  const body = toBase64Url(unescape(encodeURIComponent(JSON.stringify(payload))));
   const signingInput = `${header}.${body}`;
 
   const keyData = privateKey.replace(/-----BEGIN PRIVATE KEY-----|-----END PRIVATE KEY-----|\s/g, '');
@@ -48,7 +49,7 @@ async function getGoogleToken() {
   });
 
   const tokenData = await tokenRes.json();
-  return tokenData.access_token || null;
+  return tokenData.id_token || null;
 }
 
 const SYSTEM = `You are AdsAI, a senior digital marketing analyst for an agency. You have direct access to Meta Ads, Google Ads, Google Merchant Center, and GA4 data through connected tools.
@@ -58,8 +59,7 @@ Guidelines:
 - Present data in markdown tables for easy scanning
 - Highlight anomalies, budget waste, and clear opportunities
 - Be direct and concise — agency teams need quick answers
-- Add context to numbers (vs prior period, vs target) when available
-- Flag underperforming campaigns or creatives proactively`;
+- Add context to numbers (vs prior period, vs target) when available`;
 
 export async function POST(request) {
   try {
@@ -69,7 +69,7 @@ export async function POST(request) {
       return NextResponse.json({ error: 'ANTHROPIC_API_KEY is not configured.' }, { status: 500 });
     }
 
-    const authToken = await getGoogleToken();
+    const authToken = await getGoogleIdentityToken();
 
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -84,14 +84,7 @@ export async function POST(request) {
         max_tokens: 4096,
         system: SYSTEM,
         messages,
-        mcp_servers: [
-          {
-            type: 'url',
-            url: MCP_SERVER_URL,
-            name: 'ad-manager',
-            authorization_token: authToken,
-          }
-        ],
+        mcp_servers: [{ type: 'url', url: MCP_SERVER_URL, name: 'ad-manager', authorization_token: authToken }],
       }),
     });
 
@@ -101,12 +94,7 @@ export async function POST(request) {
     }
 
     const data = await response.json();
-    const content = (data.content || [])
-      .filter((b) => b.type === 'text')
-      .map((b) => b.text)
-      .join('\n')
-      .trim();
-
+    const content = (data.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim();
     return NextResponse.json({ content: content || 'No response. Please try again.' });
   } catch (err) {
     console.error('Chat error:', err);
