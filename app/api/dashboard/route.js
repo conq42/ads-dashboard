@@ -3,8 +3,9 @@ import { NextResponse } from 'next/server';
 export const maxDuration = 60;
 
 const MCP_SERVER_URL = 'https://ads-mcp-server-1047464303560.europe-west3.run.app/mcp';
+const MCP_AUDIENCE = 'https://ads-mcp-server-1047464303560.europe-west3.run.app';
 
-async function getGoogleToken() {
+async function getGoogleIdentityToken() {
   const email = process.env.GOOGLE_CLIENT_EMAIL;
   const privateKey = process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n');
   if (!email || !privateKey) return null;
@@ -14,14 +15,14 @@ async function getGoogleToken() {
     iss: email,
     sub: email,
     aud: 'https://oauth2.googleapis.com/token',
+    target_audience: MCP_AUDIENCE,
     iat: now,
     exp: now + 3600,
-    scope: 'https://www.googleapis.com/auth/cloud-platform',
   };
 
-  const encode = (obj) => btoa(JSON.stringify(obj)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-  const header = encode({ alg: 'RS256', typ: 'JWT' });
-  const body = btoa(unescape(encodeURIComponent(JSON.stringify(payload)))).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+  const toBase64Url = (str) => btoa(str).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+  const header = toBase64Url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
+  const body = toBase64Url(unescape(encodeURIComponent(JSON.stringify(payload))));
   const signingInput = `${header}.${body}`;
 
   const keyData = privateKey.replace(/-----BEGIN PRIVATE KEY-----|-----END PRIVATE KEY-----|\s/g, '');
@@ -48,7 +49,7 @@ async function getGoogleToken() {
   });
 
   const tokenData = await tokenRes.json();
-  return tokenData.access_token || null;
+  return tokenData.id_token || null;
 }
 
 const SCHEMA = `{
@@ -110,22 +111,20 @@ export async function GET(request) {
     return NextResponse.json({ error: 'ANTHROPIC_API_KEY is not set.' }, { status: 500 });
   }
 
-  const authToken = await getGoogleToken();
+  const authToken = await getGoogleIdentityToken();
 
   const prompt = `Today is ${today}. Fetch ad performance data for the last ${rangeDays} days across Meta Ads, Google Ads, and GA4.
 
 Collect:
-1. Meta Ads: total spend, ROAS, CTR, conversions, impressions, CPC + top 10 campaigns with individual spend/ROAS/CTR/conversions/status
+1. Meta Ads: total spend, ROAS, CTR, conversions, impressions, CPC + top 10 campaigns
 2. Google Ads: same metrics + top 10 campaigns
 3. GA4: sessions, conversions, revenue, conversion rate
 4. Daily spend breakdown for each day in the range (Meta and Google separately)
 
-Compute summary: totalSpend = meta spend + google spend, blendedROAS = total revenue / total spend, totalConversions = meta + google conversions, avgCTR and avgCPC as weighted averages.
-
 Return ONLY a valid JSON object — no markdown, no backticks, no explanation. Use exactly this structure:
 ${SCHEMA}
 
-Use null for any values you cannot fetch. Round all numbers to 2 decimal places maximum.`;
+Use null for any values you cannot fetch.`;
 
   try {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -139,42 +138,23 @@ Use null for any values you cannot fetch. Round all numbers to 2 decimal places 
       body: JSON.stringify({
         model: 'claude-sonnet-4-6',
         max_tokens: 4096,
-        system: 'You are a data fetching assistant. You use tools to retrieve ad performance data and return ONLY valid JSON. Never include markdown formatting, backticks, or explanatory text — only the raw JSON object.',
+        system: 'You are a data fetching assistant. Return ONLY valid JSON, no markdown, no backticks.',
         messages: [{ role: 'user', content: prompt }],
-        mcp_servers: [
-          {
-            type: 'url',
-            url: MCP_SERVER_URL,
-            name: 'ad-manager',
-            authorization_token: authToken,
-          }
-        ],
+        mcp_servers: [{ type: 'url', url: MCP_SERVER_URL, name: 'ad-manager', authorization_token: authToken }],
       }),
     });
 
     if (!response.ok) {
       const err = await response.json().catch(() => ({}));
-      throw new Error(err?.error?.message || `Anthropic API error: ${response.status}`);
+      throw new Error(err?.error?.message || `API error: ${response.status}`);
     }
 
     const apiData = await response.json();
-    const rawText = (apiData.content || [])
-      .filter((b) => b.type === 'text')
-      .map((b) => b.text)
-      .join('\n')
-      .trim();
-
-    if (!rawText) throw new Error('No data returned. Try refreshing.');
+    const rawText = (apiData.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim();
+    if (!rawText) throw new Error('No data returned.');
 
     const cleaned = rawText.replace(/```json|```/g, '').trim();
-    let parsed;
-    try {
-      parsed = JSON.parse(cleaned);
-    } catch {
-      throw new Error('Could not parse data response.');
-    }
-
-    return NextResponse.json(parsed);
+    return NextResponse.json(JSON.parse(cleaned));
   } catch (err) {
     console.error('Dashboard API error:', err);
     return NextResponse.json({ error: err.message }, { status: 500 });
