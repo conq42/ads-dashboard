@@ -34,12 +34,17 @@ export async function POST(request) {
         'anthropic-beta': 'mcp-client-2025-04-04',
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
+        model: 'claude-sonnet-4-20250514',
         max_tokens: 4096,
         system: SYSTEM,
         messages,
         mcp_servers: [
-          { type: 'url', url: MCP_SERVER_URL, name: 'ad-manager' }
+          {
+            type: 'url',
+            url: MCP_SERVER_URL,
+            name: 'ad-manager',
+            authorization_token: process.env.MCP_AUTH_TOKEN,
+          }
         ],
       }),
     });
